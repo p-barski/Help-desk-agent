@@ -91,7 +91,7 @@ jobs:
           }
 
       - name: Download model
-        run: ollama pull ${{ MODEL_NAME }}
+        run: ollama pull ${{ env.MODEL_NAME }}
 
       - name: Run tests (Linux)
         if: runner.os == 'Linux'
