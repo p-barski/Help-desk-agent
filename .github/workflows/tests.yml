@@ -1,0 +1,103 @@
+name: Tests
+
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Test on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    env:
+      OLLAMA_HOST: 127.0.0.1:11434
+      MODEL_NAME: "qwen3.5"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Install Ollama (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          curl -fsSL https://ollama.com/install.sh | sh
+          sudo systemctl stop ollama 2>/dev/null || true
+          nohup ollama serve > "$RUNNER_TEMP/ollama.log" 2>&1 &
+
+      - name: Install Ollama (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          irm https://ollama.com/install.ps1 | iex
+
+          $ollamaDir = Join-Path $env:LOCALAPPDATA "Programs\Ollama"
+          if (Test-Path (Join-Path $ollamaDir "ollama.exe")) {
+              $env:PATH = "$ollamaDir;$env:PATH"
+          }
+
+          $ollama = Get-Command ollama -ErrorAction Stop
+
+          # Start the server if the installer did not start it.
+          try {
+              Invoke-RestMethod `
+                  -Uri "http://${env:OLLAMA_HOST}/api/tags" `
+                  -TimeoutSec 2 | Out-Null
+          }
+          catch {
+              Start-Process -FilePath $ollama.Source `
+                  -ArgumentList "serve" `
+                  -WindowStyle Hidden
+          }
+
+      - name: Wait for Ollama
+        shell: pwsh
+        run: |
+          $ready = $false
+
+          for ($i = 0; $i -lt 60; $i++) {
+              try {
+                  Invoke-RestMethod `
+                      -Uri "http://${env:OLLAMA_HOST}/api/tags" `
+                      -TimeoutSec 2 | Out-Null
+
+                  $ready = $true
+                  break
+              }
+              catch {
+                  Start-Sleep -Seconds 2
+              }
+          }
+
+          if (-not $ready) {
+              throw "Ollama server did not become ready."
+          }
+
+      - name: Download model
+        run: ollama pull ${{ MODEL_NAME }}
+
+      - name: Run tests (Linux)
+        if: runner.os == 'Linux'
+        run: bash ./run_tests.sh
+
+      - name: Run tests (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./run_tests.ps1
