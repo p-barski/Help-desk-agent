@@ -41,9 +41,9 @@ class Tools:
 
         Args:
             policy: The document to retrieve:
-                - cancellations: cancellation, refund, and return rules
-                - faq: general shop questions and answers
-                - prices: product prices and pricing rules
+                - cancellations: rules for cancelling or changing a booking, and for refunds
+                - faq: Answers to common questions: opening hours, age limits, payment, what to do when something goes wrong
+                - prices: bike types, rental prices, add-ons, deposits and late return fees
         """
         match policy:
             case Policies.CANCELLATIONS:
