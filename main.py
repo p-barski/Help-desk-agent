@@ -1,11 +1,14 @@
-import json
+import os
 
-from ollama import chat
+from dotenv import load_dotenv
 
+from backends import AgentBackend, get_backend
 from shop_data import ShopData
 from tools import Tools
 
-MODEL = "qwen3.5"
+load_dotenv()
+MODEL_NAME = os.getenv("MODEL_NAME", "qwen3.5")
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama").lower()  # or "openai"
 AGENT_LOOP_MAX_ITERATIONS = 8
 
 SYSTEM_PROMPT = """
@@ -25,55 +28,42 @@ Answer concisely and politely.
 """
 
 
-def run_agent(question: str, tools: dict) -> str:
+def run_agent(
+    question: str, tools: dict[str, callable], backend: AgentBackend = None
+) -> str:
+    backend = backend or get_backend(LLM_PROVIDER, MODEL_NAME)
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": question},
     ]
 
     for _ in range(AGENT_LOOP_MAX_ITERATIONS):
-        response = chat(
-            model=MODEL,
-            messages=messages,
-            tools=tools.values(),
-        )
-
-        messages.append(response.message)
-
-        tool_calls = response.message.tool_calls or []
+        assistant_message, content, tool_calls = backend.chat(messages, tools)
+        messages.append(assistant_message)
 
         # No tool call == final answer
         if not tool_calls:
-            return response.message.content or ""
+            return content
 
         for call in tool_calls:
-            name = call.function.name
-            args = call.function.arguments
-
-            function = tools.get(name)
+            function = tools.get(call.name)
 
             if function is None:
                 result = {"error": "Unknown tool"}
             else:
                 try:
-                    result = function(**args)
+                    result = function(**call.args)
                 except (TypeError, ValueError) as exc:
                     result = {"error": f"Invalid tool arguments: {exc}"}
                 except Exception:
                     result = {"error": "Tool execution failed"}
 
-            messages.append(
-                {
-                    "role": "tool",
-                    "tool_name": name,
-                    "content": json.dumps(result),
-                }
-            )
+            messages.append(backend.tool_message(call, result))
 
     return "I couldn't complete the request. Please try again."
 
 
-def setup_tools() -> dict:
+def setup_tools() -> dict[str, callable]:
     shop_data = ShopData()
     tools = Tools(shop_data)
     return {
@@ -84,8 +74,11 @@ def setup_tools() -> dict:
 
 
 def main():
-    print("Shop assistant. Type 'exit' or 'quit' to exit.")
+    print(
+        f"Shop assistant ({LLM_PROVIDER}: {MODEL_NAME}). Type 'exit' or 'quit' to exit."
+    )
     tools = setup_tools()
+    backend = get_backend(LLM_PROVIDER, MODEL_NAME)
     while True:
         try:
             question = input("\nYou: ").strip()
@@ -94,7 +87,7 @@ def main():
             if not question:
                 continue
             try:
-                print("\nAssistant:", run_agent(question, tools))
+                print("\nAssistant:", run_agent(question, tools, backend))
             except (KeyboardInterrupt, EOFError) as e:
                 raise e
             except Exception as e:
